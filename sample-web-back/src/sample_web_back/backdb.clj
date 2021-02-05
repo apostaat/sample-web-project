@@ -24,25 +24,25 @@
 
 (s/defschema DateOutput (s/pred date-output-validate))
 
-(s/defschema PatientInfoInput {:insurance_no InsuranceNo
+(s/defschema ClientInfoInput {:insurance_no InsuranceNo
                                :fullname s/Str
                                :gender Gender
                                :birth_date DateInput
                                :address s/Str})
 
-(s/defschema PatientInfoOutput (st/merge (-> PatientInfoInput
+(s/defschema ClientInfoOutput (st/merge (-> ClientInfoInput
                                              (st/select-keys [:insurance_no :fullname :gender :time :address]))
                                          {:birth_date DateOutput}))
 
-(s/defschema PatientInfoOutputGet (st/merge (-> PatientInfoInput
+(s/defschema ClientInfoOutputGet (st/merge (-> ClientInfoInput
                                                 (st/select-keys [:insurance_no :fullname :gender :time :address]))
                                             {:birth_date DateInput}))
 
-(s/defschema PatientInfoUpdate (-> PatientInfoInput
+(s/defschema ClientInfoUpdate (-> ClientInfoInput
                                    (st/select-keys [:insurance_no :fullname :gender :time :birth_date :address])
                                    (st/optional-keys [:fullname :gender :time :birth_date :address])))
 
-(s/defschema PatientInfoDelete {:insurance_no InsuranceNo})
+(s/defschema ClientInfoDelete {:insurance_no InsuranceNo})
 
 (def db
   {:dbtype "postgresql"
@@ -58,13 +58,13 @@
    :user (env :user)
    :password (env :password)})
 
-(def health-sql (db/create-table-ddl :patients [[:insurance_no "VARCHAR(15)" "PRIMARY KEY"]
+(def health-sql (db/create-table-ddl :clients [[:insurance_no "VARCHAR(15)" "PRIMARY KEY"]
                                                 [:fullname "VARCHAR(50)"]
                                                 [:gender "VARCHAR(1)"]
                                                 [:birth_date :date]
                                                 [:address "VARCHAR(100)"]]))
 
-(def backup-sql (db/create-table-ddl :patients_backup [[:id "SERIAL"]
+(def backup-sql (db/create-table-ddl :clients_backup [[:id "SERIAL"]
                                                        [:insurance_no "VARCHAR(15)"]
                                                        [:fullname "VARCHAR(50)"]
                                                        [:gender "VARCHAR(1)"]
@@ -73,7 +73,7 @@
 
 (def create-pseudodelete-trigger-func
   "CREATE OR REPLACE FUNCTION pseudodelete() RETURNS trigger AS $function$ BEGIN
-  INSERT INTO patients_backup(insurance_no, fullname, gender, birth_date, address) 
+  INSERT INTO clients_backup(insurance_no, fullname, gender, birth_date, address) 
   VALUES(OLD.insurance_no, OLD.fullname, OLD.gender, OLD.birth_date, OLD.address);
   RETURN OLD;
   END;
@@ -82,7 +82,7 @@
 
 (def create-pseudodelete-backup-trigger
   "CREATE TRIGGER row_pseudodelete
-   AFTER DELETE ON patients
+   AFTER DELETE ON clients
    FOR EACH ROW
    EXECUTE PROCEDURE pseudodelete();")
 
@@ -104,52 +104,52 @@
                          create-pseudodelete-backup-trigger]))
 
 (defn fix-clean-db [t]
-  (db/db-do-commands db ["TRUNCATE TABLE patients"
-                         "TRUNCATE TABLE patients_backup"])
+  (db/db-do-commands db ["TRUNCATE TABLE clients"
+                         "TRUNCATE TABLE clients_backup"])
   (t))
 
 (defn check-insurance-add [insurance-no]
-  (when-not (empty? (db/query db ["SELECT * FROM patients WHERE insurance_no = ?" insurance-no]))
-    (throw (ex-info "Patient with such insurance id is already exists." {:type :id-exists
+  (when-not (empty? (db/query db ["SELECT * FROM clients WHERE insurance_no = ?" insurance-no]))
+    (throw (ex-info "Client with such insurance id is already exists." {:type :id-exists
                                                                          :reason "id-exists"}))))
 
 (defn check-insurance-update [insurance-no]
-  (when (empty? (db/query db ["SELECT * FROM patients WHERE insurance_no = ?" insurance-no]))
-    (throw (ex-info "Patient with such insurance id does not exist." {:type :does-not-exist
+  (when (empty? (db/query db ["SELECT * FROM clients WHERE insurance_no = ?" insurance-no]))
+    (throw (ex-info "Client with such insurance id does not exist." {:type :does-not-exist
                                                                       :reason "does-not-exist"}))))
 
-(defn insert-patient-db
+(defn insert-client-db
   [db body]
   (let [format-ins-no (transform-insurance-no (:insurance_no body))
         format-bday (time-to-sql-convert (:birth_date body))]
     (check-insurance-add format-ins-no)
-    (db/insert! db :patients (assoc body
+    (db/insert! db :clients (assoc body
                                     :insurance_no format-ins-no
                                     :birth_date format-bday))
-    (db/query db ["SELECT * FROM patients WHERE insurance_no = ?" format-ins-no])))
+    (db/query db ["SELECT * FROM clients WHERE insurance_no = ?" format-ins-no])))
 
 (defn create-update-field [body]
   (if-let [bday (:birth_date body)]
     (assoc (dissoc body :insurance_no) :birth_date (time-to-sql-convert bday))
     (dissoc body :insurance_no)))
 
-(defn update-patient-db
+(defn update-client-db
   [body]
   (let [format-ins-no (transform-insurance-no (:insurance_no body))
         updated-info (create-update-field body)]
     (check-insurance-update format-ins-no)
-    (cond (= 1 (first (db/update! db :patients updated-info ["insurance_no = ?" format-ins-no]))) {}
+    (cond (= 1 (first (db/update! db :clients updated-info ["insurance_no = ?" format-ins-no]))) {}
           :else (throw (ex-info "Database input failed." {:type :failed
                                                           :reason "database-input-failed"})))))
 
-(defn safe-delete-patient-db [insurance-no]
+(defn safe-delete-client-db [insurance-no]
   (let [format-ins-no (transform-insurance-no (:insurance_no insurance-no))]
     (check-insurance-update format-ins-no)
-    (cond (not= 1 (db/delete! db :patients ["insurance_no = ?" format-ins-no])) {}
+    (cond (not= 1 (db/delete! db :clients ["insurance_no = ?" format-ins-no])) {}
           :else (throw (ex-info "Database input failed." {:type :failed
                                                           :reason "database-input-failed"})))))
 (defn read-all-db []
-  (let [db-response (db/query db ["SELECT * FROM patients"])]
+  (let [db-response (db/query db ["SELECT * FROM clients"])]
     (mapv (fn [x]
             (assoc x :birth_date (time-from-sql-convert (:birth_date x))))
           db-response)))
@@ -163,9 +163,9 @@
 
       :tags ["sample-web-project-routes"]
 
-      (GET "/patient" req
-        :summary "Get all patients info"
-        :return [PatientInfoOutputGet]
+      (GET "/client" req
+        :summary "Get all clients info"
+        :return [ClientInfoOutputGet]
 
         {:status 200
          :body (read-all-db)})
@@ -184,23 +184,23 @@
         {:status 200
          :body (check-insurance-update (transform-insurance-no number))})
 
-      (POST "/patient" req
-        :summary "Add patient to database"
-        :body [body PatientInfoInput]
-        :return [PatientInfoOutput]
+      (POST "/client" req
+        :summary "Add client to database"
+        :body [body ClientInfoInput]
+        :return [ClientInfoOutput]
         {:status 200
-         :body (insert-patient-db db body)})
+         :body (insert-client-db db body)})
 
-      (PUT "/patient" req
-        :summary "Modify patient info"
-        :body [body PatientInfoUpdate]
+      (PUT "/client" req
+        :summary "Modify client info"
+        :body [body ClientInfoUpdate]
         :return {}
         {:status 200
-         :body (update-patient-db body)})
+         :body (update-client-db body)})
 
-      (DELETE "/patient" req
-        :summary "Delete patient info"
-        :body [body PatientInfoDelete]
+      (DELETE "/client" req
+        :summary "Delete client info"
+        :body [body ClientInfoDelete]
         :return {}
         {:status 200
-         :body (safe-delete-patient-db body)}))))
+         :body (safe-delete-client-db body)}))))
